@@ -1,3 +1,12 @@
-streamlit
-mypupdf
-difflib
+# ── Core UI & helpers ─────────────────────────────────────────
+streamlit>=1.33.0          # web framework
+requests>=2.32.0           # Palantir REST calls
+
+# ── Document parsers / renderers ─────────────────────────────
+PyMuPDF>=1.24.3            # fast, pure-Python PDF engine (imported as “fitz”)
+docx2txt>=0.8              # quick Word → text extraction
+python-docx>=1.1.0         # (optional) richer .docx parsing if you extend features
+
+# ── Nice-to-have utilities ───────────────────────────────────
+pillow>=10.3.0             # image support; Streamlit pulls this in but pin it explicitly
+python-dotenv>=1.0.1       # load PALANTIR_TOKEN from a .env file (optional)
