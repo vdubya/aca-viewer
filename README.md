@@ -39,3 +39,6 @@ A sample Streamlit implementation showcasing the ACA Viewer. The app uploads PDF
 - `PALANTIR_BASE` – base URL for Palantir pipelines (default: `https://foundry.api.dod.mil`)
 - `PALANTIR_TOKEN` – token used for Palantir API requests
 
+```
+$ python -m aca_viewer
+```
