@@ -1,4 +1,4 @@
-```python
+
 """
 streamlit_app.py  ·  v0.2.6  (June 2025)
 
@@ -202,4 +202,4 @@ if f2:
     text2 = extract_text(bytes2, f2.name)
     for line in diff_strings(text, text2):
         st.code(line)
-```
+
