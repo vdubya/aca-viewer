@@ -1,6 +1,6 @@
-```python
+
 """
-streamlit_app.py  ·  v0.2.2  (June 2025)
+streamlit_app.py  ·  v0.2.3  (June 2025)
 
 ACA Viewer – complete, self-contained Streamlit app.
 
@@ -19,7 +19,6 @@ import io
 import os
 import re
 import sys
-import uuid
 import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -55,7 +54,6 @@ if not hasattr(st, "runtime") or not hasattr(st.runtime, "scriptrunner_utils"):
 def palantir_get(endpoint: str, params: dict | None = None):
     """Fetch from Foundry or return mock JSON when SIMULATE."""
     if SIMULATE:
-        # ── stub data for dev mode ─────────────────────────
         if "toc_extract" in endpoint:
             return {"entries": [
                 {"title": "CHAPTER 1 INTRODUCTION", "page": 0},
@@ -71,7 +69,6 @@ def palantir_get(endpoint: str, params: dict | None = None):
         if "sec_parse" in endpoint:
             return {"section": "dummy-sec-json"}
         return {}
-    # ── real Foundry REST call ────────────────────────────
     url = f"{PALANTIR_BASE}{endpoint}"
     s = Session()
     s.headers.update(HEADERS)
@@ -82,9 +79,7 @@ def palantir_get(endpoint: str, params: dict | None = None):
 # ══════════════════════════════════════════════════════════════
 #  UTILITIES
 # ══════════════════════════════════════════════════════════════
-
 def extract_text(data: bytes, name: str) -> str:
-    """Extract plain text from PDF, Word, or .sec XML."""
     suf = Path(name).suffix.lower()
     if suf == ".pdf":
         pdf = fitz.open(stream=data, filetype="pdf")
@@ -106,10 +101,6 @@ def next_color(idx: int) -> str:
 
 
 def fuzzy_positions(text: str, term: str, max_dist: int) -> list[tuple[int,int]]:
-    """
-    Return list of (start, end) positions in `text` where any
-    whole word is within `max_dist` of `term` by Levenshtein.
-    """
     matches = []
     for m in re.finditer(r'\b\w+\b', text, re.I):
         w = m.group(0)
@@ -119,110 +110,90 @@ def fuzzy_positions(text: str, term: str, max_dist: int) -> list[tuple[int,int]]
 
 
 def diff_strings(a: str, b: str, ctx: int = 3) -> list[str]:
-    """Unified diff lines between two texts."""
     import difflib
     return list(difflib.unified_diff(
-        a.splitlines(), b.splitlines(),
-        lineterm="", n=ctx,
+        a.splitlines(), b.splitlines(), lineterm="", n=ctx,
         fromfile="Doc A", tofile="Doc B"
     ))
 
 # ══════════════════════════════════════════════════════════════
 #  STREAMLIT APP
 # ══════════════════════════════════════════════════════════════
-st.set_page_config(
-    page_title="ACA Viewer",
-    page_icon="📑",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# ── URL query params: stable API ───────────────────────────
+st.set_page_config(page_title="ACA Viewer", page_icon="📑", layout="wide")
 params = st.query_params
 ADMIN_VIEW = params.get("admin", ["0"])[0] == "1"
 
-# ── Sidebar: simulation toggle & admin link ────────────────
+# Sidebar controls
 with st.sidebar:
     st.title("ACA ⚙️")
     if "simulate" not in st.session_state:
         st.session_state.simulate = SIMULATE
-    st.session_state.simulate = st.checkbox(
-        "🛠 Dev mode (simulate Palantir)",
-        value=st.session_state.simulate
-    )
-    SIMULATE = st.session_state.simulate
+    SIMULATE = st.checkbox("🛠 Dev mode (simulate Palantir)", value=st.session_state.simulate)
+    st.session_state.simulate = SIMULATE
     if st.button("Reload page"):
-        try:
-            st.rerun()
-        except AttributeError:
-            st.experimental_rerun()
+        try: st.rerun()
+        except AttributeError: st.experimental_rerun()
     if not ADMIN_VIEW:
         st.markdown("[Switch to Admin view](?admin=1)")
 
-# ── Admin page ─────────────────────────────────────────────
 if ADMIN_VIEW:
     st.header("👩‍🔧 Admin – saved searches & comments")
     searches = DB.table("searches").all()
     comments = DB.table("comments").all()
     st.subheader(f"🔍 Saved searches ({len(searches)})")
-    for row in searches:
-        st.write(f"- **{row['term']}** · used {row['hits']}× · id `{row.doc_id}`")
+    for r in searches:
+        st.write(f"- **{r['term']}** · used {r['hits']}× · id `{r.doc_id}`")
     st.subheader(f"💬 Comments ({len(comments)})")
     for c in comments:
         st.write(f"• *{c['snippet']}* — {c['note']} _(on {c['file']})_")
     sys.exit(0)
 
-# ── Upload area ───────────────────────────────────────────
+# Upload area
 c1, c2 = st.columns(2)
 with c1:
     f1 = st.file_uploader("Document A", type=["pdf","docx","doc","sec"], key="A")
 with c2:
     f2 = st.file_uploader("Document B (optional diff)", type=["pdf","docx","doc","sec"], key="B")
 
-# ── fallback to sample if SIMULATE and no upload ───────────
+# Fallback sample
 if not f1:
     if SIMULATE:
         sample = os.getenv("SIM_SAMPLE_PATH", "./sample.pdf")
         if Path(sample).exists():
             f1 = open(sample, "rb")
-            st.warning(f"🔧 Using sample file: {sample}")
+            st.warning(f"🔧 Using sample: {sample}")
         else:
-            st.error(f"No upload and sample not found at: {sample}")
+            st.error(f"Sample not found: {sample}")
             st.stop()
     else:
         st.info("Upload at least one file ⬆️")
         st.stop()
 
-# ── read file bytes once ───────────────────────────────────
+# Read file bytes once
 doc_bytes = f1.read()
 
-# ── fetch pipeline data ───────────────────────────────────
+# Fetch Palantir data
 with st.spinner("Fetching Palantir data…"):
-    toc_data = palantir_get("/pipelines/toc_extract", {"fileName": f1.name})
-    ner_data = palantir_get("/pipelines/ner_extract", {"fileName": f1.name})
+    toc = palantir_get("/pipelines/toc_extract", {"fileName": f1.name})
+    ner = palantir_get("/pipelines/ner_extract", {"fileName": f1.name})
     sec_json = palantir_get("/pipelines/sec_parse", {"fileName": f1.name}) if f1.name.lower().endswith(".sec") else None
 
-# ── Sidebar: highlight controls ────────────────────────────
+# Highlight controls
 st.sidebar.header("🔦 Highlight controls")
-
-# TOC toggle & navigation
-show_toc = st.sidebar.checkbox("Show TOC", True)
+show_toc = st.sidebar.checkbox("Show TOC cards", True)
 if show_toc:
-    for i, entry in enumerate(toc_data.get("entries", [])):
-        if st.sidebar.button(entry["title"][:60], key=f"toc-{i}"):
+    for i, entry in enumerate(toc.get("entries", [])):
+        if st.sidebar.button(entry["title"], key=f"toc-{i}"):
             st.session_state["goto_page"] = entry["page"]
 
-# NER filters
 st.sidebar.subheader("NER labels")
-all_labels = sorted({e["label"] for e in ner_data.get("entities", [])})
+all_labels = sorted({e["label"] for e in ner.get("entities", [])})
 active_labels = st.sidebar.multiselect("Show labels:", all_labels, default=all_labels)
 
-# Saved searches
 st.sidebar.subheader("🔍 Saved searches")
 SearchTbl = DB.table("searches")
 def incr_hit(term):
-    q = Query()
-    cur = SearchTbl.get(q.term == term)
+    q = Query(); cur = SearchTbl.get(q.term == term)
     if cur:
         SearchTbl.update({"hits": cur["hits"] + 1}, doc_ids=[cur.doc_id])
     else:
@@ -231,72 +202,58 @@ def incr_hit(term):
 saved_terms = [r["term"] for r in SearchTbl.all()]
 active_terms = st.sidebar.multiselect("Activate terms:", saved_terms, default=saved_terms)
 new_term = st.sidebar.text_input("New term")
-if st.sidebar.button("Save term"):
-    if new_term.strip():
-        SearchTbl.insert({"term": new_term.strip(), "hits": 0})
-        try:
-            st.rerun()
-        except AttributeError:
-            st.experimental_rerun()
+if st.sidebar.button("Save term") and new_term.strip():
+    SearchTbl.insert({"term": new_term.strip(), "hits": 0})
+    try: st.rerun()
+    except: st.experimental_rerun()
 
-# Fuzzy slider
 st.sidebar.subheader("Fuzzy search")
 max_dist = st.sidebar.slider("Max edit distance", 0, 5, 1)
 
-# ── Main Viewer ────────────────────────────────────────────
+# Main viewer
 st.title("📑 ACA Viewer")
 pdf = fitz.open(stream=doc_bytes, filetype="pdf") if f1.name.lower().endswith(".pdf") else None
 page_no = st.session_state.get("goto_page", 0)
-
-# Render page with rectangles
 if pdf:
     page = pdf[page_no]
-    for ent in ner_data.get("entities", []):
-        if ent["label"] in active_labels and ent.get("page") == page_no and ent.get("coords"):
+    for ent in ner.get("entities", []):
+        if ent.get("label") in active_labels and ent.get("page")==page_no and ent.get("coords"):
             rect = fitz.Rect(*ent["coords"])
-            c = fitz/utils/getColor(next_color(all_labels.index(ent["label"])))
-            page.draw_rect(rect, color=c, fill=c+"55")
-    pix = page.get_pixmap(matrix=fitz.Matrix(1,1), alpha=False)
-    st.image(pix.tobytes(), use_column_width=True)
+            col = next_color(all_labels.index(ent["label"]))
+            page.draw_rect(rect, color=fitz.utils.getColor(col), fill=fitz.utils.getColor(col+"55"))
+    st.image(page.get_pixmap().tobytes(), use_column_width=True)
 else:
     st.warning("Non-PDF rendering placeholder.")
 
-# Extract full text
-full_text = extract_text(doc_bytes, f1.name)
-
-# Matches
+text = extract_text(doc_bytes, f1.name)
 st.subheader("Matches")
 hits = []
 for term in active_terms:
-    for s, e in fuzzy_positions(full_text, term, max_dist):
-        snippet = full_text[max(0, s-30): e+30].replace("\n", " ")
+    for s, e in fuzzy_positions(text, term, max_dist):
+        snippet = text[max(0, s-30):e+30].replace("\n", " ")
         hits.append({"term": term, "snippet": snippet})
     incr_hit(term)
 st.write(f"Found {len(hits)} matches.")
-for h in hits[:250]:
-    st.write(f"• **{h['term']}** …{h['snippet']}…")
+for h in hits[:250]: st.write(f"• **{h['term']}** …{h['snippet']}…")
 
 # Commenting
 st.subheader("💬 Add comment")
 snippet_sel = st.text_input("Snippet (copy/paste)")
 note = st.text_area("Your note")
-if st.button("Save comment"):
-    if snippet_sel.strip() and note.strip():
-        DB.table("comments").insert({
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "file": f1.name,
-            "snippet": snippet_sel.strip(),
-            "note": note.strip()
-        })
-        try:
-            st.rerun()
-        except AttributeError:
-            st.experimental_rerun()
+if st.button("Save comment") and snippet_sel.strip() and note.strip():
+    DB.table("comments").insert({
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "file": f1.name,
+        "snippet": snippet_sel.strip(),
+        "note": note.strip()
+    })
+    try: st.rerun()
+    except: st.experimental_rerun()
 
-# Optional diff
+# Diff viewer
 if f2:
     st.subheader("🔍 Diff Viewer")
     other_text = extract_text(f2.read(), f2.name)
-    diff = diff_strings(full_text, other_text)
+    diff = diff_strings(text, other_text)
     st.code("\n".join(diff), language="diff")
 
