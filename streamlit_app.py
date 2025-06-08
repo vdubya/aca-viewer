@@ -1,4 +1,3 @@
-
 """
 streamlit_app.py  ·  v0.2.3  (June 2025)
 
@@ -174,9 +173,9 @@ doc_bytes = f1.read()
 
 # Fetch Palantir data
 with st.spinner("Fetching Palantir data…"):
-    toc = palantir_get("/pipelines/toc_extract", {"fileName": f1.name})
-    ner = palantir_get("/pipelines/ner_extract", {"fileName": f1.name})
-    sec_json = palantir_get("/pipelines/sec_parse", {"fileName": f1.name}) if f1.name.lower().endswith(".sec") else None
+    toc = palantir_get("/pipelines/toc_extract", params={"fileName": f1.name})
+    ner = palantir_get("/pipelines/ner_extract", params={"fileName": f1.name})
+    sec_json = palantir_get("/pipelines/sec_parse", params={"fileName": f1.name}) if f1.name.lower().endswith(".sec") else None
 
 # Highlight controls
 st.sidebar.header("🔦 Highlight controls")
@@ -256,4 +255,3 @@ if f2:
     other_text = extract_text(f2.read(), f2.name)
     diff = diff_strings(text, other_text)
     st.code("\n".join(diff), language="diff")
-
