@@ -1,20 +1,8 @@
-# Core framework & HTTP
 streamlit>=1.27.0
 requests>=2.32.0
-
-# PDF rendering & image support
 PyMuPDF>=1.24.3
-pillow>=10.3.0
-
-# Word → text
+python-Levenshtein>=0.25
+tinydb>=4.8.0
+streamlit-pdf-viewer>=0.0.24
 docx2txt>=0.8
 python-docx>=1.1.0
-
-# Fuzzy search
-python-Levenshtein>=0.25
-
-# Local JSON persistence
-tinydb>=4.8.0
-
-# Load env vars (optional)
-python-dotenv>=1.0.1
