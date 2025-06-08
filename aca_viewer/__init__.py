@@ -1,4 +1,5 @@
-"""ACA Viewer module for Streamlit."""
+
+# ACA Viewer module
 
 import os
 import re
@@ -14,15 +15,15 @@ from tinydb import TinyDB
 from requests import Session
 from streamlit_pdf_viewer import pdf_viewer
 
-# ─── Config ─────────────────────────────────────────────
 PALANTIR_BASE = os.getenv("PALANTIR_BASE", "https://foundry.api.dod.mil")
 PALANTIR_TOKEN = os.getenv("PALANTIR_TOKEN", "###-token-###")
-DB = TinyDB(Path(__file__).resolve().parents[0].joinpath("..", "aca_store.json"))
+DB = TinyDB(Path(__file__).resolve().parents[1] / "aca_store.json")
 HEADERS = {"Authorization": f"Bearer {PALANTIR_TOKEN}"}
 COLOR_POOL = [
     "#FFC107", "#03A9F4", "#8BC34A", "#E91E63",
     "#9C27B0", "#FF5722", "#607D8B", "#FF9800",
 ]
+
 SIMULATE_DEFAULT = bool(int(os.getenv("SIMULATE_PALANTIR", "0")))
 
 @lru_cache(maxsize=64)
@@ -35,6 +36,7 @@ def palantir_get(endpoint: str, params: dict | None = None):
         if "sec_parse" in endpoint:
             return {"section": ""}
         return {}
+
     url = f"{PALANTIR_BASE}{endpoint}"
     sess = Session(); sess.headers.update(HEADERS)
     res = sess.get(url, params=params or {}, timeout=30)
@@ -53,7 +55,7 @@ def extract_text(data: bytes, name: str) -> str:
             t.write(data); t.flush()
             return docx2txt.process(t.name)
     if ext == '.sec':
-        return data.decode('utf-8','ignore')
+        return data.decode('utf-8', 'ignore')
     raise ValueError('Unsupported file type')
 
 def diff_strings(a: str, b: str, ctx: int = 3) -> list[str]:
@@ -66,42 +68,23 @@ def diff_strings(a: str, b: str, ctx: int = 3) -> list[str]:
 def next_color(idx: int) -> str:
     return COLOR_POOL[idx % len(COLOR_POOL)]
 
-def fuzzy_positions(text: str, term: str, maxd: int) -> list[tuple[int,int]]:
+def fuzzy_positions(text: str, term: str, maxd: int) -> list[tuple[int, int]]:
     hits = []
     for m in re.finditer(r'\b\w+\b', text, re.I):
         if distance(m.group(0).lower(), term.lower()) <= maxd:
             hits.append((m.start(), m.end()))
     return hits
 
-# ─── Main application ───────────────────────────────────
-def main():
+def run():
+    """Run the ACA Viewer Streamlit app."""
     st.set_page_config(page_title='AI Criteria Assistant', layout='wide')
     params = st.query_params
     ADMIN = params.get('admin', ['0'])[0] == '1'
 
-    # ── Sidebar ──────────────────────────────────────────
     with st.sidebar:
         st.title('AI Criteria Assistant')
         with st.expander('Advanced', expanded=False):
-            f2 = st.file_uploader('Document (for compare)', type=['pdf','docx','sec'])
-
-        st.subheader('🔎 Search Terms')
-        if 'new_term' not in st.session_state:
-            st.session_state.new_term = ''
-        st.session_state.new_term = st.text_input('Add term:', st.session_state.new_term)
-        if st.button('Save term'):
-            term = st.session_state.new_term.strip()
-            if term:
-                S = DB.table('searches')
-                S.insert({'term': term, 'hits': 0})
-                st.session_state.new_term = ''
-                st.experimental_rerun()
-
-        S = DB.table('searches')
-        saved_terms = [r['term'] for r in S.all()]
-        st.subheader('Saved Terms')
-        active_terms = st.multiselect('Activate:', saved_terms, default=saved_terms)
-
+            f2 = st.file_uploader('Document (for compare)', type=['pdf', 'docx', 'sec'])
         st.subheader('Navigation & Highlights')
         toc = st.session_state.get('toc_data', {}).get('entries', [])
         if st.checkbox('Show TOC', value=True):
@@ -119,12 +102,8 @@ def main():
         st.markdown('---')
         st.markdown("<div style='position:absolute; bottom:0; width:90%;'>", unsafe_allow_html=True)
         with st.expander('Settings', expanded=False):
-            if 'simulate' not in st.session_state:
-                st.session_state.simulate = SIMULATE_DEFAULT
-            st.session_state.simulate = st.checkbox('Dev mode (simulate pipelines)', value=st.session_state.simulate)
-            if 'max_dist' not in st.session_state:
-                st.session_state.max_dist = 1
-            st.session_state.max_dist = st.slider('Max edit distance', 0, 5, st.session_state.max_dist)
+            SIMULATE = st.checkbox('Dev mode (simulate pipelines)', value=False)
+            maxd = st.slider('Max edit distance', 0, 5, 1)
         st.markdown('</div>', unsafe_allow_html=True)
 
     if ADMIN:
@@ -139,7 +118,7 @@ def main():
 
     st.header('Document A')
     viewer_bytes = None
-    f1 = st.file_uploader('Upload Document A', type=['pdf','docx','sec'], key='mainA')
+    f1 = st.file_uploader('Upload Document A', type=['pdf', 'docx', 'sec'], key='mainA')
     sample_url = 'https://www.wbdg.org/FFC/DOD/UFC/ufc_1_300_01_2021.pdf'
     if st.button('Load Sample PDF'):
         try:
@@ -157,12 +136,11 @@ def main():
 
     doc_name = f1.name if f1 else sample_url.split('/')[-1]
 
-    if st.session_state.get('simulate', SIMULATE_DEFAULT):
+    if SIMULATE:
         toc_data, ner_data = {'entries': []}, {'entities': []}
     else:
         toc_data = palantir_get('/pipelines/toc_extract', params={'fileName': doc_name})
         ner_data = palantir_get('/pipelines/ner_extract', params={'fileName': doc_name})
-
     st.session_state['toc_data'] = toc_data
     st.session_state['ner_labels'] = sorted({e['label'] for e in ner_data.get('entities', [])})
 
@@ -174,7 +152,7 @@ def main():
             annotations.append({'page': pg, 'coords': coords, 'color': next_color(hash(ent['label']))})
     txt_all = extract_text(viewer_bytes, doc_name)
     search_hits = []
-    for term in active_terms:
+    for term in [r['term'] for r in DB.table('searches').all()]:
         for m in re.finditer(re.escape(term), txt_all, re.I):
             pg_idx = next((i for i, p in enumerate(doc) if m.start() < len(p.get_text('text'))), 0)
             rects = doc[pg_idx].search_for(term)
@@ -182,7 +160,7 @@ def main():
                 annotations.append({'page': pg_idx, 'coords': [rects[0].x0, rects[0].y0, rects[0].x1, rects[0].y1], 'color': next_color(hash(term))})
                 snippet = txt_all[m.start():m.end()]
                 search_hits.append({'term': term, 'snippet': snippet, 'page': pg_idx})
-        for s, e in fuzzy_positions(txt_all, term, st.session_state.get('max_dist', 1)):
+        for s, e in fuzzy_positions(txt_all, term, maxd):
             snippet = txt_all[s:e]
             for i in range(len(doc)):
                 rects = doc[i].search_for(snippet)
@@ -199,12 +177,7 @@ def main():
     snip = st.text_area('Selected snippet')
     note = st.text_input('Note')
     if st.button('Save Comment') and snip and note:
-        DB.table('comments').insert({
-            'timestamp': datetime.datetime.utcnow().isoformat(),
-            'file': doc_name,
-            'snippet': snip,
-            'note': note
-        })
+        DB.table('comments').insert({'timestamp': datetime.datetime.utcnow().isoformat(), 'file': doc_name, 'snippet': snip, 'note': note})
         try:
             st.rerun()
         except AttributeError:
@@ -216,5 +189,8 @@ def main():
         for line in diff_strings(txt_all, text2):
             st.code(line)
 
-def run():
-    main()
+def main():
+    run()
+
+if __name__ == "__main__":
+    run()
