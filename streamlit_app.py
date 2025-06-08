@@ -98,8 +98,10 @@ with st.sidebar:
     SIMULATE = st.checkbox('Dev mode (simulate)', value=False)
     st.markdown('---')
     if st.button('Reload'):
-        try: st.rerun()
-        except: st.experimental_rerun()
+        try:
+            st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
     if not ADMIN:
         st.markdown('[Switch to Admin view](?admin=1)')
 
@@ -166,7 +168,7 @@ if f1.name.lower().endswith('.pdf'):
             r = fitz.Rect(*ent['coords'])
             col = next_color(labels.index(ent['label']))
             page.draw_rect(r, color=fitz.utils.getColor(col), fill=fitz.utils.getColor(col+'55'))
-    st.image(page.get_pixmap().tobytes(), use_column_width=True)
+    st.image(page.get_pixmap().tobytes(), use_container_width=True)
 else:
     st.write('No PDF preview available.')
 
@@ -202,4 +204,3 @@ if f2:
     text2 = extract_text(bytes2, f2.name)
     for line in diff_strings(text, text2):
         st.code(line)
-
