@@ -155,7 +155,7 @@ if f1.name.lower().endswith('.pdf'):
     pdf_bytes = doc.write()
     b64 = base64.b64encode(pdf_bytes).decode('utf-8')
     pdf_url = f"data:application/pdf;base64,{b64}"
-    html_embed = f'<object data="{pdf_url}" type="application/pdf" width="100%" height="800px"></object>'
+    html_embed = f"<embed src=\"{pdf_url}\" type=\"application/pdf\" width=\"100%\" height=\"800px\" />"
     components.html(html_embed, height=820, scrolling=True)
 else:
     st.write('Non-PDF preview not supported.')
