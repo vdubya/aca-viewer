@@ -20,6 +20,28 @@ A sample Streamlit implementation showcasing the ACA Viewer. The app uploads PDF
 - Comment on selected text
 - Admin view of saved searches and comments via `?admin=1`
 
+## Run locally
+
+1. Install the dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Launch the app:
+
+   ```bash
+   streamlit run streamlit_app.py
+   ```
+
+
+## Environment variables
+
+- `PALANTIR_BASE` – base URL for Palantir pipelines (default: `https://foundry.api.dod.mil`)
+- `PALANTIR_TOKEN` – token used for Palantir API requests
+- `SIMULATE_PALANTIR` – set to `1` to disable real API calls
+
+=======
 ## Environment variables
 
 - `PALANTIR_BASE` – base URL for Palantir pipelines (default: `https://foundry.api.dod.mil`)
