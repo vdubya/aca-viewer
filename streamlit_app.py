@@ -237,6 +237,6 @@ if f2:
     text2 = extract_text(f2.read(), f2.name)
     for line in diff_strings(txt_all, text2):
         st.code(line)
-=======
+
 if __name__ == "__main__":
     run()
