@@ -1,6 +1,6 @@
+"""Streamlit entry point for the AI Criteria Assistant."""
 
-"""
-streamlit_app.py  ·  v0.2.14  (June 2025)
+from aca_viewer import run
 
 AI Criteria Assistant – Streamlit app with PDF.js viewer and dynamic highlights.
 
@@ -239,3 +239,6 @@ if f2:
     text2 = extract_text(f2.read(), f2.name)
     for line in diff_strings(txt_all, text2):
         st.code(line)
+=======
+if __name__ == "__main__":
+    run()
