@@ -1,13 +1,12 @@
-
 """
-streamlit_app.py  ·  v0.2.7  (June 2025)
+streamlit_app.py  ·  v0.2.8  (June 2025)
 
 ACA Viewer – self-contained Streamlit app.
 
 Features:
 • Dev mode with SIMULATE toggle
-• PDF rendering + TOC navigation + NER overlays
-• Fuzzy search + saved searches (TinyDB) with clickable results
+• PDF text rendering + TOC navigation + NER & search overlays
+• Fuzzy search + saved searches (TinyDB) with clickable navigation
 • Inline comments
 • Two‑doc diff view
 • Admin page via ?admin=1
@@ -55,7 +54,7 @@ def extract_text(data: bytes, name: str) -> str:
     ext = Path(name).suffix.lower()
     if ext == '.pdf':
         doc = fitz.open(stream=data, filetype='pdf')
-        return '\n'.join(p.get_text('text') for p in doc)
+        return '\n'.join(page.get_text('text') for page in doc)
     if ext in ('.doc', '.docx'):
         import docx2txt, tempfile
         with tempfile.NamedTemporaryFile(delete=False) as t:
@@ -78,22 +77,31 @@ def next_color(i: int) -> str:
     return COLOR_POOL[i % len(COLOR_POOL)]
 
 
-def fuzzy_positions(text: str, term: str, maxd: int) -> list[tuple[int,int]]:
-    hits = []
-    for m in re.finditer(r'\b\w+\b', text, re.I):
-        if distance(m.group(0).lower(), term.lower()) <= maxd:
-            hits.append((m.start(), m.end()))
-    return hits
+def apply_highlights(text: str, highlights: list[tuple[int,int,str]]) -> str:
+    # highlights: list of (start, end, hex_color)
+    offsets = []
+    for start,end,color in sorted(highlights, key=lambda x: x[0]):
+        offsets.append((start, f"<span style='background:{color}33;'>{text[start:end]}</span>"))
+    result = ''
+    last = 0
+    for start, span in offsets:
+        end = start + len(re.sub('<[^>]+>', '', span))
+        result += text[last:start] + span
+        last = end
+    result += text[last:]
+    return result
 
 # ─── App setup ───────────────────────────────────────────
 st.set_page_config(page_title='ACA Viewer', layout='wide')
 params = st.query_params
 ADMIN = params.get('admin', ['0'])[0] == '1'
 
-# ─── Sidebar ─────────────────────────────────────────────
+# ─── Sidebar Controls ────────────────────────────────────
 with st.sidebar:
     st.title('ACA Viewer')
-    SIMULATE = st.checkbox('Dev mode (simulate pipelines)', value=False)
+    SIMULATE = st.checkbox('Dev mode (simulate)', value=False)
+    with st.expander('Settings', expanded=False):
+        maxd = st.slider('Max edit distance', 0, 5, 1)
     st.markdown('---')
     if st.button('Reload'):
         try: st.rerun()
@@ -117,11 +125,11 @@ with col1:
 with col2:
     f2 = st.file_uploader('Document B (diff)', type=['pdf','docx','sec'])
 if not f1:
-    st.info('Upload at least Document A')
+    st.info('Upload Document A')
     st.stop()
 bytes1 = f1.read()
 
-# ─── Pipelines or stubs ─────────────────────────────────
+# ─── Pipeline Data (or stubs) ───────────────────────────
 if SIMULATE:
     toc = {'entries': []}
     ner = {'entities': []}
@@ -130,14 +138,14 @@ else:
     ner = palantir_get('/pipelines/ner_extract', params={'fileName': f1.name})
 
 # ─── Highlight & navigation controls ────────────────────
-st.sidebar.header('Highlights & Results')
+st.sidebar.header('Navigation & Results')
 # TOC navigation
 show_toc = st.sidebar.checkbox('Show TOC', True)
 if show_toc:
     for idx, e in enumerate(toc.get('entries', [])):
         if st.sidebar.button(e['title'][:60], key=f'toc-{idx}'):
             st.session_state['goto_page'] = e['page']
-# NER labels
+# NER labels filters
 labels = sorted({x['label'] for x in ner.get('entities', [])})
 active_labels = st.sidebar.multiselect('NER Labels', labels, default=labels)
 # Saved searches
@@ -149,56 +157,60 @@ if st.sidebar.button('Add') and new_term:
     tbl.insert({'term': new_term.strip(), 'hits':0})
     try: st.rerun()
     except AttributeError: st.experimental_rerun()
-# Fuzzy slider
-maxd = st.sidebar.slider('Max edit distance', 0, 5, 1)
 
-# ─── Render PDF ─────────────────────────────────────────
+# ─── Render PDF as selectable text with overlays ─────────
 st.title('ACA Viewer')
-# Open PDF
 if f1.name.lower().endswith('.pdf'):
-    pg = st.session_state.get('goto_page', 0)
+    page_no = st.session_state.get('goto_page', 0)
     doc = fitz.open(stream=bytes1, filetype='pdf')
-    # Precompute page texts & offsets
-    pages_text = [p.get_text('text') for p in doc]
-    offsets = []
-    off = 0
-    for txt in pages_text:
-        offsets.append(off)
-        off += len(txt) + 1
-    # Draw page
-    page = doc[pg]
+    page = doc[page_no]
+    text = page.get_text('text')
+    # Collect highlight spans
+    highlights = []
+    # NER
     for ent in ner.get('entities', []):
-        if ent.get('page')==pg and ent['label'] in active_labels and ent.get('coords'):
-            r = fitz.Rect(*ent['coords'])
-            c = next_color(labels.index(ent['label']))
-            page.draw_rect(r, color=fitz.utils.getColor(c), fill=fitz.utils.getColor(c+'55'))
-    st.image(page.get_pixmap().tobytes(), use_container_width=True)
+        if ent.get('page')==page_no and ent['label'] in active_labels:
+            # find all occurrences
+            for m in re.finditer(re.escape(ent['text']), text):
+                color = next_color(labels.index(ent['label']))
+                highlights.append((m.start(), m.end(), color))
+    # Saved searches & fuzzy
+    for term in active_terms:
+        for m in re.finditer(re.escape(term), text, re.I):
+            color = next_color(hash(term))
+            highlights.append((m.start(), m.end(), color))
+        # fuzzy
+        for s,e in fuzzy_positions(text, term, maxd):
+            color = next_color(hash(term))
+            highlights.append((s,e,color))
+    # Apply highlights and display
+    html = apply_highlights(text, highlights)
+    st.markdown(f"<div style='white-space: pre-wrap; font-family: monospace;'>{html}</div>", unsafe_allow_html=True)
 else:
     st.write('No PDF preview available.')
 
-# ─── Compute and display clickable search results ────────
+# ─── Clickable Search Results ───────────────────────────
+# gather all page-text hits
 full_text = extract_text(bytes1, f1.name)
-# Gather hits with page mapping
+offsets = []
+acc = 0
+for p in fitz.open(stream=bytes1, filetype='pdf'):
+    offsets.append(acc)
+    acc += len(p.get_text('text')) + 1
 hits = []
 for term in active_terms:
     for s,e in fuzzy_positions(full_text, term, maxd):
-        # determine page index
-        pg_idx = len(offsets)-1
-        for i, start in enumerate(offsets):
-            if s < start:
-                pg_idx = max(0, i-1)
-                break
-        snippet = full_text[max(0, s-30):e+30].replace('\n',' ')
-        hits.append({'term': term, 'snippet': snippet, 'page': pg_idx})
-        # update hit count
-        q = Query()
-        if tbl.get(q.term==term):
-            tbl.update({'hits': tbl.get(q.term==term)['hits']+1}, q.term==term)
-# Display in sidebar
-with st.sidebar.expander('Search Results', expanded=True):
-    for idx, h in enumerate(hits[:100]):
-        title = f"{h['term']} (p{h['page']+1}): {h['snippet'][:40]}..."
-        if st.button(title, key=f'res-{idx}'):
+        pg = max(i for i,off in enumerate(offsets) if s>=off)
+        snippet = full_text[s:e]
+        hits.append({'term':term,'snippet':snippet,'page':pg})
+        # update count
+        q=Query()
+        if tbl.get(q.term==term): tbl.update({'hits':tbl.get(q.term==term)['hits']+1},q.term==term)
+
+with st.sidebar.expander('Search Results',True):
+    for idx,h in enumerate(hits[:100]):
+        label = f"{h['term']} (p{h['page']+1}): {h['snippet'][:30]}..."
+        if st.button(label, key=f'res{idx}'):
             st.session_state['goto_page'] = h['page']
 
 # ─── Comments ───────────────────────────────────────────
@@ -208,7 +220,7 @@ note = st.text_input('Note')
 if st.button('Save Comment') and snip and note:
     DB.table('comments').insert({
         'timestamp': datetime.datetime.utcnow().isoformat(),
-        'file': f1.name, 'snippet': snip, 'note': note
+        'file': f1.name,'snippet':snip,'note':note
     })
     try: st.rerun()
     except AttributeError: st.experimental_rerun()
@@ -216,7 +228,5 @@ if st.button('Save Comment') and snip and note:
 # ─── Diff View ───────────────────────────────────────────
 if f2 is not None:
     st.subheader('Diff View')
-    bytes2 = f2.read()
-    text2 = extract_text(bytes2, f2.name)
-    for line in diff_strings(full_text, text2):
-        st.code(line)
+    text2 = extract_text(f2.read(),f2.name)
+    for line in diff_strings(full_text,text2): st.code(line)
