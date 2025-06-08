@@ -89,18 +89,19 @@ st.set_page_config(page_title='AI Criteria Assistant', layout='wide')
 params = st.query_params
 ADMIN = params.get('admin',['0'])[0] == '1'
 
+if 'doc_loaded' not in st.session_state:
+    st.session_state['doc_loaded'] = False
+doc_loaded = st.session_state['doc_loaded']
+
 # ─── Sidebar ─────────────────────────────────────────────
 with st.sidebar:
     st.title('AI Criteria Assistant')
-    # Advanced section for Document B
-    with st.expander('Advanced', expanded=False):
-        f2 = st.file_uploader('Document (for compare)', type=['pdf','docx','sec'])
 
     st.subheader('🔎 Search Terms')
     if 'new_term' not in st.session_state:
         st.session_state.new_term = ''
-    st.session_state.new_term = st.text_input('Add term:', st.session_state.new_term)
-    if st.button('Save term'):
+    st.session_state.new_term = st.text_input('Add term:', st.session_state.new_term, disabled=not doc_loaded)
+    if st.button('Save term', disabled=not doc_loaded):
         term = st.session_state.new_term.strip()
         if term:
             S = DB.table('searches')
@@ -111,7 +112,7 @@ with st.sidebar:
     S = DB.table('searches')
     saved_terms = [r['term'] for r in S.all()]
     st.subheader('Saved Terms')
-    active_terms = st.multiselect('Activate:', saved_terms, default=saved_terms)
+    active_terms = st.multiselect('Activate:', saved_terms, default=saved_terms if doc_loaded else [], disabled=not doc_loaded)
 
     st.subheader('Navigation & Highlights')
     # TOC
@@ -128,8 +129,11 @@ with st.sidebar:
         hits = st.session_state.get('search_hits', [])
         for idx, h in enumerate(hits[:50]):
             lbl = f"{h['term']} (p{h['page']+1}): {h['snippet'][:30]}..."
-            if st.button(lbl, key=f'srch{idx}'):
+            if st.button(lbl, key=f'srch{idx}', disabled=not doc_loaded):
                 st.session_state['goto_page'] = h['page']
+    # Advanced section for Document B
+    with st.expander('Advanced', expanded=False):
+        f2 = st.file_uploader('Document (for compare)', type=['pdf','docx','sec'])
     st.markdown('---')
     # Settings at bottom
     st.markdown("<div style='position:absolute; bottom:0; width:90%;'>", unsafe_allow_html=True)
@@ -151,9 +155,9 @@ if ADMIN:
     st.stop()
 
 # ─── Main Panel: Document A upload & sample button ───────
-st.header('Document A')
+st.header('Load file to analyze...')
 viewer_bytes = None
-f1 = st.file_uploader('Upload Document A', type=['pdf','docx','sec'], key='mainA')
+f1 = st.file_uploader('Upload file to analyze...', type=['pdf','docx','sec'], key='mainA')
 if st.button('Load Sample PDF'):
     sample_url = 'https://www.wbdg.org/FFC/DOD/UFC/ufc_1_300_01_2021.pdf'
     try:
@@ -161,12 +165,15 @@ if st.button('Load Sample PDF'):
         resp.raise_for_status()
         viewer_bytes = resp.content
         st.success('Loaded sample PDF')
+        st.session_state['doc_loaded'] = True
     except Exception as e:
         st.error(f"Error loading sample PDF: {e}")
 if f1:
     viewer_bytes = f1.read()
+    st.session_state['doc_loaded'] = True
 if not viewer_bytes:
     st.info('Please upload Document A or click Load Sample')
+    st.session_state['doc_loaded'] = False
     st.stop()
 # document name for pipelines and diff fallback
 doc_name = f1.name if f1 else sample_url.split('/')[-1]
