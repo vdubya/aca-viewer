@@ -5,7 +5,13 @@ A sample Streamlit implementation showcasing the ACA Viewer. The app uploads PDF
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
 
 ## Features
+- Upload a document and view extracted table of contents and named entities
+- Toggle search terms with fuzzy matching and highlight results
+- Compare two documents using a unified diff view
+- Add comments on selected text
+- Admin mode for reviewing saved searches and comments
 
+## Running locally
 - Upload a document and view it directly in the browser
 - Table of Contents extraction with clickable navigation
 - Named Entity Recognition overlays with label filtering
@@ -13,26 +19,6 @@ A sample Streamlit implementation showcasing the ACA Viewer. The app uploads PDF
 - Compare two documents with a unified diff view
 - Comment on selected text
 - Admin view of saved searches and comments via `?admin=1`
-
-## Run locally
-
-1. Install the dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Launch the app:
-
-   ```bash
-   streamlit run streamlit_app.py
-   ```
-
-   Or run the package directly:
-
-   ```bash
-   python -m aca_viewer
-   ```
 
 ## Environment variables
 
