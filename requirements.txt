@@ -1,18 +1,20 @@
-# ── UI & HTTP ─────────────────────────────────────────────
-streamlit>=1.33.0
+# Core framework & HTTP
+streamlit>=1.27.0
 requests>=2.32.0
 
-# ── Document rendering / parsing ─────────────────────────
-PyMuPDF>=1.24.3           # gives the "fitz" import
-docx2txt>=0.8
-python-docx>=1.1.0        # optional richer .docx parsing
-
-# ── Fuzzy search  ────────────────────────────────────────
-python-Levenshtein>=0.25  # fast C-extension edit-distance
-
-# ── Persistence ──────────────────────────────────────────
-tinydb>=4.8.0             # simple JSON DB for comments/searches
-
-# ── Misc utilities ───────────────────────────────────────
+# PDF rendering & image support
+PyMuPDF>=1.24.3
 pillow>=10.3.0
+
+# Word → text
+docx2txt>=0.8
+python-docx>=1.1.0
+
+# Fuzzy search
+python-Levenshtein>=0.25
+
+# Local JSON persistence
+tinydb>=4.8.0
+
+# Load env vars (optional)
 python-dotenv>=1.0.1
