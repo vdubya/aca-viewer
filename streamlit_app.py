@@ -34,11 +34,7 @@ HEADERS = {"Authorization": f"Bearer {PALANTIR_TOKEN}"}
 COLOR_POOL = ["#FFC107","#03A9F4","#8BC34A","#E91E63",
               "#9C27B0","#FF5722","#607D8B","#FF9800"]
 
-# Ensure app is run with Streamlit
-if not hasattr(st, 'runtime') or not hasattr(st.runtime, 'scriptrunner_utils'):
-    print("⚠️  Please run with: streamlit run streamlit_app.py")
-    sys.exit(1)
-
+# ─── Palantir helper ─────────────────────────────────────
 @lru_cache(maxsize=64)
 def palantir_get(endpoint: str, params: dict = None):
     """Fetch JSON from Foundry endpoint."""
@@ -63,7 +59,6 @@ def extract_text(data: bytes, name: str) -> str:
         return data.decode('utf-8','ignore')
     raise ValueError('Unsupported file type')
 
-
 def diff_strings(a: str, b: str, ctx: int = 3) -> list[str]:
     import difflib
     return list(difflib.unified_diff(
@@ -73,7 +68,6 @@ def diff_strings(a: str, b: str, ctx: int = 3) -> list[str]:
 
 def next_color(i: int) -> str:
     return COLOR_POOL[i % len(COLOR_POOL)]
-
 
 def fuzzy_positions(text: str, term: str, maxd: int) -> list[tuple[int,int]]:
     hits = []
@@ -117,13 +111,11 @@ if ADMIN:
     st.stop()
 
 # ─── File Uploads ────────────────────────────────────────
-# Document A
 f1 = st.sidebar.file_uploader('Document A', type=['pdf','docx','sec'])
 if not f1:
     st.info('Please upload Document A to proceed')
     st.stop()
 bytes1 = f1.read()
-# Document B (diff) under Advanced
 with st.sidebar.expander('Advanced', expanded=False):
     f2 = st.file_uploader('Document B (diff)', type=['pdf','docx','sec'])
 
@@ -135,7 +127,7 @@ else:
     toc = palantir_get('/pipelines/toc_extract', params={'fileName': f1.name})
     ner = palantir_get('/pipelines/ner_extract', params={'fileName': f1.name})
 
-# ─── Render PDF with PyMuPDF annotations via iframe ─────
+# ─── Render PDF with PyMuPDF annotations via <object> ──
 st.title('ACA Viewer')
 if f1.name.lower().endswith('.pdf'):
     doc = fitz.open(stream=bytes1, filetype='pdf')
@@ -159,11 +151,12 @@ if f1.name.lower().endswith('.pdf'):
             coords_list = doc[pg_idx].search_for(full_text[s:e])
             if coords_list:
                 doc[pg_idx].add_highlight_annot(fitz.Rect(*coords_list[0]))
-    # Serve annotated PDF in iframe
+    # Serve annotated PDF
     pdf_bytes = doc.write()
     b64 = base64.b64encode(pdf_bytes).decode('utf-8')
     pdf_url = f"data:application/pdf;base64,{b64}"
-    components.iframe(pdf_url, width='100%', height=800, scrolling=True)
+    html_embed = f'<object data="{pdf_url}" type="application/pdf" width="100%" height="800px"></object>'
+    components.html(html_embed, height=820, scrolling=True)
 else:
     st.write('Non-PDF preview not supported.')
 
