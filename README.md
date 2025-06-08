@@ -1,26 +1,43 @@
-# 🎈 Blank app template
+# AI Criteria Assistant Viewer
 
-A simple Streamlit app that demonstrates the ACA Viewer.
+A sample Streamlit implementation showcasing the ACA Viewer. The app uploads PDF, Word or UFGS XML SEC files and displays them with dynamic highlighting driven by Palantir pipelines.
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
 
-### How to run it on your own machine
+## Features
 
-1. Install the requirements
+- Upload a document and view it directly in the browser
+- Table of Contents extraction with clickable navigation
+- Named Entity Recognition overlays with label filtering
+- Saved search terms with fuzzy matching
+- Compare two documents with a unified diff view
+- Comment on selected text
+- Admin view of saved searches and comments via `?admin=1`
 
+## Run locally
+
+1. Install the dependencies:
+
+   ```bash
+   pip install -r requirements.txt
    ```
-   $ pip install -r requirements.txt
+
+2. Launch the app:
+
+   ```bash
+   streamlit run streamlit_app.py
    ```
 
-2. Run the app
+   Or run the package directly:
 
-   ```
-   $ streamlit run streamlit_app.py
+   ```bash
+   python -m aca_viewer
    ```
 
-The `streamlit_app.py` entry point simply calls the `aca_viewer` module's
-`run()` function which contains the actual app implementation.  You can also
-invoke it directly:
+## Environment variables
+
+- `PALANTIR_BASE` – base URL for Palantir pipelines (default: `https://foundry.api.dod.mil`)
+- `PALANTIR_TOKEN` – token used for Palantir API requests
 
 ```
 $ python -m aca_viewer
