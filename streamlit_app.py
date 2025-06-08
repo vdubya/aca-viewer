@@ -1,21 +1,21 @@
-
+```python
 """
-streamlit_app.py  ·  v0.2.10  (June 2025)
+streamlit_app.py  ·  v0.2.12  (June 2025)
 
-ACA Viewer – self-contained Streamlit app with PDF.js viewer.
+ACA Viewer – self-contained Streamlit app with streamlit-pdf-viewer annotations.
 
 Features:
 • Dev mode with SIMULATE toggle
-• PDF.js viewer for selectable text + PyMuPDF annotations
+• PDF.js viewer via streamlit-pdf-viewer for selectable text + overlay highlights
 • TOC navigation + NER & search overlays
 • Saved & fuzzy searches (TinyDB) with clickable navigation
 • Inline comments
 • Two-doc diff view
 • Admin page via ?admin=1
 • Uses st.query_params and st.rerun() with fallback
-• Guarded to run only via `streamlit run`
+• Runs under streamlit run
 """
-import os, re, sys, datetime, base64
+import os, re, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -24,23 +24,21 @@ import fitz  # PyMuPDF
 from Levenshtein import distance
 from tinydb import TinyDB, Query
 from requests import Session
-import streamlit.components.v1 as components
+from streamlit_pdf_viewer import pdf_viewer  # new component
 
 # ─── Config ─────────────────────────────────────────────
-PALANTIR_BASE = os.getenv("PALANTIR_BASE", "https://foundry.api.dod.mil")
+PALANTIR_BASE  = os.getenv("PALANTIR_BASE", "https://foundry.api.dod.mil")
 PALANTIR_TOKEN = os.getenv("PALANTIR_TOKEN", "###-token-###")
 DB = TinyDB(Path(__file__).with_name("aca_store.json"))
 HEADERS = {"Authorization": f"Bearer {PALANTIR_TOKEN}"}
 COLOR_POOL = ["#FFC107","#03A9F4","#8BC34A","#E91E63",
               "#9C27B0","#FF5722","#607D8B","#FF9800"]
 
-# ─── Palantir helper ─────────────────────────────────────
 @lru_cache(maxsize=64)
-def palantir_get(endpoint: str, params: dict = None):
-    """Fetch JSON from Foundry endpoint."""
+def palantir_get(endpoint: str, params: dict=None):
     url = f"{PALANTIR_BASE}{endpoint}"
     sess = Session(); sess.headers.update(HEADERS)
-    res = sess.get(url, params=params, timeout=30)
+    res = sess.get(url, params=params or {}, timeout=30)
     res.raise_for_status()
     return res.json()
 
@@ -59,15 +57,18 @@ def extract_text(data: bytes, name: str) -> str:
         return data.decode('utf-8','ignore')
     raise ValueError('Unsupported file type')
 
-def diff_strings(a: str, b: str, ctx: int = 3) -> list[str]:
+
+def diff_strings(a: str, b: str, ctx: int=3) -> list[str]:
     import difflib
     return list(difflib.unified_diff(
         a.splitlines(), b.splitlines(), lineterm='', n=ctx,
         fromfile='Doc A', tofile='Doc B'
     ))
 
-def next_color(i: int) -> str:
-    return COLOR_POOL[i % len(COLOR_POOL)]
+
+def next_color(idx: int) -> str:
+    return COLOR_POOL[idx % len(COLOR_POOL)]
+
 
 def fuzzy_positions(text: str, term: str, maxd: int) -> list[tuple[int,int]]:
     hits = []
@@ -87,101 +88,106 @@ with st.sidebar:
     SIMULATE = st.checkbox('Dev mode (simulate pipelines)', value=False)
     st.markdown('---')
     if st.button('Reload'):
-        try:
-            st.rerun()
-        except AttributeError:
-            st.experimental_rerun()
+        try: st.rerun()
+        except AttributeError: st.experimental_rerun()
     if not ADMIN:
         st.markdown('[Switch to Admin view](?admin=1)')
-    # Settings at bottom
+    with st.expander('Advanced', expanded=False):
+        f2 = st.file_uploader('Document B (diff)', type=['pdf','docx','sec'])
     st.markdown("<div style='position:absolute; bottom:0; width:90%;'>", unsafe_allow_html=True)
     with st.expander('Settings', expanded=False):
-        maxd = st.slider('Max edit distance', min_value=0, max_value=5, value=1)
+        maxd = st.slider('Max edit distance', 0, 5, 1)
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ─── Admin View ──────────────────────────────────────────
 if ADMIN:
     st.header('Admin: Saved Searches & Comments')
     st.subheader('Search Terms')
-    for r in DB.table('searches').all():
-        st.write(r)
+    for r in DB.table('searches').all(): st.write(r)
     st.subheader('Comments')
-    for c in DB.table('comments').all():
-        st.write(c)
+    for c in DB.table('comments').all(): st.write(c)
     st.stop()
 
 # ─── File Uploads ────────────────────────────────────────
 f1 = st.sidebar.file_uploader('Document A', type=['pdf','docx','sec'])
 if not f1:
-    st.info('Please upload Document A to proceed')
+    st.info('Please upload Document A')
     st.stop()
 bytes1 = f1.read()
-with st.sidebar.expander('Advanced', expanded=False):
-    f2 = st.file_uploader('Document B (diff)', type=['pdf','docx','sec'])
 
 # ─── Pipeline Data (or stub) ────────────────────────────
 if SIMULATE:
-    toc = {'entries': []}
-    ner = {'entities': []}
+    toc, ner = {'entries':[]}, {'entities':[]}
 else:
-    toc = palantir_get('/pipelines/toc_extract', params={'fileName': f1.name})
-    ner = palantir_get('/pipelines/ner_extract', params={'fileName': f1.name})
+    toc = palantir_get('/pipelines/toc_extract', params={'fileName':f1.name})
+    ner = palantir_get('/pipelines/ner_extract', params={'fileName':f1.name})
 
-# ─── Render PDF with PyMuPDF annotations via <object> ──
-st.title('ACA Viewer')
-if f1.name.lower().endswith('.pdf'):
-    doc = fitz.open(stream=bytes1, filetype='pdf')
-    # Highlight NER
+# ─── Compute Annotations ─────────────────────────────────
+doc = fitz.open(stream=bytes1, filetype='pdf') if f1.name.lower().endswith('.pdf') else None
+annotations = []
+if doc:
+    # NER annotations
     for ent in ner.get('entities', []):
         pg = ent.get('page'); coords = ent.get('coords')
         if pg is not None and coords:
-            doc[pg].add_highlight_annot(fitz.Rect(*coords))
-    # Highlight saved searches & fuzzy
+            annotations.append({
+                'page': pg,
+                'coords': coords,
+                'color': next_color(hash(ent['label']))
+            })
+    # Search annotations
     full_text = extract_text(bytes1, f1.name)
     for term in [r['term'] for r in DB.table('searches').all()]:
-        # exact matches
+        # exact
         for m in re.finditer(re.escape(term), full_text, re.I):
-            pg_idx = next((i for i, p in enumerate(doc) if m.start() < len(p.get_text('text'))), 0)
-            coords_list = doc[pg_idx].search_for(term)
-            if coords_list:
-                doc[pg_idx].add_highlight_annot(fitz.Rect(*coords_list[0]))
+            # find page and rects
+            for i in range(len(doc)):
+                rects = doc[i].search_for(term)
+                for r in rects:
+                    annotations.append({
+                        'page': i,
+                        'coords': [r.x0, r.y0, r.x1, r.y1],
+                        'color': next_color(hash(term))
+                    })
         # fuzzy
         for s,e in fuzzy_positions(full_text, term, maxd):
-            pg_idx = next((i for i, p in enumerate(doc) if s < len(p.get_text('text'))), 0)
-            coords_list = doc[pg_idx].search_for(full_text[s:e])
-            if coords_list:
-                doc[pg_idx].add_highlight_annot(fitz.Rect(*coords_list[0]))
-    # Serve annotated PDF
-    pdf_bytes = doc.write()
-    b64 = base64.b64encode(pdf_bytes).decode('utf-8')
-    pdf_url = f"data:application/pdf;base64,{b64}"
-    html_embed = f"<embed src=\"{pdf_url}\" type=\"application/pdf\" width=\"100%\" height=\"800px\" />"
-    components.html(html_embed, height=820, scrolling=True)
+            snippet = full_text[s:e]
+            for i in range(len(doc)):
+                rects = doc[i].search_for(snippet)
+                if rects:
+                    r = rects[0]
+                    annotations.append({
+                        'page': i,
+                        'coords': [r.x0, r.y0, r.x1, r.y1],
+                        'color': next_color(hash(term))
+                    })
+
+# ─── Render PDF via streamlit-pdf-viewer ────────────────
+st.title('ACA Viewer')
+if doc:
+    pdf_bytes = bytes1
+    pdf_viewer(pdf_bytes, height=800, annotations=annotations)
 else:
     st.write('Non-PDF preview not supported.')
 
 # ─── Clickable Search Results ───────────────────────────
+# (unchanged)
 full_text = extract_text(bytes1, f1.name)
-offsets = []
-acc = 0
+offsets=[]; acc=0
 for p in fitz.open(stream=bytes1, filetype='pdf'):
-    offsets.append(acc)
-    acc += len(p.get_text('text')) + 1
-hits = []
+    offsets.append(acc); acc+=len(p.get_text('text'))+1
+hits=[]
 for term in [r['term'] for r in DB.table('searches').all()]:
     for s,e in fuzzy_positions(full_text, term, maxd):
         pg = max(i for i, off in enumerate(offsets) if s >= off)
-        snippet = full_text[s:e]
-        hits.append({'term': term, 'snippet': snippet, 'page': pg})
-        # increment count
-        q = Query()
-        T = DB.table('searches')
+        hits.append({'term': term, 'snippet': full_text[s:e], 'page': pg})
+        q = Query(); T = DB.table('searches')
         if T.get(q.term == term):
             T.update({'hits': T.get(q.term == term)['hits'] + 1}, q.term == term)
 with st.sidebar.expander('Search Results', expanded=True):
     for idx, h in enumerate(hits[:50]):
-        label = f"{h['term']} (p{h['page']+1}): {h['snippet'][:30]}..."
-        if st.button(label, key=f'srch{idx}'):
+        lbl = f"{h['term']} (p{h['page']+1}): {h['snippet'][:30]}..."
+        if st.button(lbl, key=f'srch{idx}'):
             st.session_state['goto_page'] = h['page']
 
 # ─── Comments ───────────────────────────────────────────
@@ -199,8 +205,9 @@ if st.button('Save Comment') and snip and note:
     except AttributeError: st.experimental_rerun()
 
 # ─── Diff View ───────────────────────────────────────────
-if f2:
+if 'f2' in locals() and f2:
     st.subheader('Diff')
-    text2 = extract_text(f2.read(), f2.name)
-    for line in diff_strings(full_text, text2):
+    txt2 = extract_text(f2.read(), f2.name)
+    for line in diff_strings(full_text, txt2):
         st.code(line)
+```
