@@ -2,7 +2,8 @@
 
 from aca_viewer import run
 
-# AI Criteria Assistant – Streamlit app with PDF.js viewer and dynamic highlights.
+```
+AI Criteria Assistant – Streamlit app with PDF.js viewer and dynamic highlights.
 
 Features:
 • PDF.js viewer via streamlit-pdf-viewer for selectable text + overlay highlights
@@ -14,7 +15,8 @@ Features:
 • Doc A uploader on main panel; Doc B (for compare) in Advanced sidebar
 • Sample PDF load button for quick testing
 • Settings (incl. Dev mode & fuzzy distance) in bottom expander
-"""
+```
+
 import os
 import re
 import datetime
