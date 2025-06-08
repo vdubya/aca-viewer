@@ -1,3 +1,4 @@
+
 # ACA Viewer module
 
 import os
@@ -23,14 +24,26 @@ COLOR_POOL = [
     "#9C27B0", "#FF5722", "#607D8B", "#FF9800",
 ]
 
+SIMULATE_DEFAULT = bool(int(os.getenv("SIMULATE_PALANTIR", "0")))
+
 @lru_cache(maxsize=64)
 def palantir_get(endpoint: str, params: dict | None = None):
+    if st.session_state.get("simulate", SIMULATE_DEFAULT):
+        if "toc_extract" in endpoint:
+            return {"entries": []}
+        if "ner_extract" in endpoint:
+            return {"entities": []}
+        if "sec_parse" in endpoint:
+            return {"section": ""}
+        return {}
+
     url = f"{PALANTIR_BASE}{endpoint}"
     sess = Session(); sess.headers.update(HEADERS)
     res = sess.get(url, params=params or {}, timeout=30)
     res.raise_for_status()
     return res.json()
 
+# ─── Utilities ───────────────────────────────────────────
 def extract_text(data: bytes, name: str) -> str:
     ext = Path(name).suffix.lower()
     if ext == '.pdf':
@@ -62,7 +75,6 @@ def fuzzy_positions(text: str, term: str, maxd: int) -> list[tuple[int, int]]:
             hits.append((m.start(), m.end()))
     return hits
 
-
 def run():
     """Run the ACA Viewer Streamlit app."""
     st.set_page_config(page_title='AI Criteria Assistant', layout='wide')
@@ -81,9 +93,6 @@ def run():
                     st.session_state['goto_page'] = entry['page']
         labels = st.session_state.get('ner_labels', [])
         active_labels = st.multiselect('NER Labels', labels, default=labels)
-        S = DB.table('searches')
-        terms = [r['term'] for r in S.all()]
-        active_terms = st.multiselect('Search Terms', terms, default=terms)
         with st.expander('Search Results', expanded=False):
             hits = st.session_state.get('search_hits', [])
             for idx, h in enumerate(hits[:50]):
@@ -180,12 +189,8 @@ def run():
         for line in diff_strings(txt_all, text2):
             st.code(line)
 
-
-
 def main():
     run()
 
 if __name__ == "__main__":
     run()
-
-

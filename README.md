@@ -5,6 +5,7 @@ A sample Streamlit implementation showcasing the ACA Viewer. The app uploads PDF
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://aca-viewer.streamlit.app/)
 
 ## Features
+
 - Upload a document and view extracted table of contents and named entities
 - Toggle search terms with fuzzy matching and highlight results
 - Compare two documents using a unified diff view
@@ -20,28 +21,12 @@ A sample Streamlit implementation showcasing the ACA Viewer. The app uploads PDF
 - Comment on selected text
 - Admin view of saved searches and comments via `?admin=1`
 
-## Run locally
-
-1. Install the dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Launch the app:
-
-   ```bash
-   streamlit run streamlit_app.py
-   ```
-
-
 ## Environment variables
 
 - `PALANTIR_BASE` – base URL for Palantir pipelines (default: `https://foundry.api.dod.mil`)
 - `PALANTIR_TOKEN` – token used for Palantir API requests
 - `SIMULATE_PALANTIR` – set to `1` to disable real API calls
 
-=======
 ## Environment variables
 
 - `PALANTIR_BASE` – base URL for Palantir pipelines (default: `https://foundry.api.dod.mil`)
