@@ -25,7 +25,7 @@ import streamlit as st
 import requests
 import fitz  # PyMuPDF
 from Levenshtein import distance
-from tinydb import TinyDB, Query
+from tinydb import TinyDB
 from requests import Session
 from streamlit_pdf_viewer import pdf_viewer
 
@@ -34,11 +34,20 @@ PALANTIR_BASE = os.getenv("PALANTIR_BASE", "https://foundry.api.dod.mil")
 PALANTIR_TOKEN = os.getenv("PALANTIR_TOKEN", "###-token-###")
 DB = TinyDB(Path(__file__).with_name("aca_store.json"))
 HEADERS = {"Authorization": f"Bearer {PALANTIR_TOKEN}"}
-COLOR_POOL = ["#FFC107","#03A9F4","#8BC34A","#E91E63",
-              "#9C27B0","#FF5722","#607D8B","#FF9800"]
+COLOR_POOL = ["#FFC107", "#03A9F4", "#8BC34A", "#E91E63",
+              "#9C27B0", "#FF5722", "#607D8B", "#FF9800"]
+SIMULATE_DEFAULT = bool(int(os.getenv("SIMULATE_PALANTIR", "0")))
 
 @lru_cache(maxsize=64)
-def palantir_get(endpoint: str, params: dict=None):
+def palantir_get(endpoint: str, params: dict | None = None):
+    if st.session_state.get("simulate", SIMULATE_DEFAULT):
+        if "toc_extract" in endpoint:
+            return {"entries": []}
+        if "ner_extract" in endpoint:
+            return {"entities": []}
+        if "sec_parse" in endpoint:
+            return {"section": ""}
+        return {}
     url = f"{PALANTIR_BASE}{endpoint}"
     sess = Session(); sess.headers.update(HEADERS)
     res = sess.get(url, params=params or {}, timeout=30)
@@ -88,7 +97,24 @@ with st.sidebar:
     # Advanced section for Document B
     with st.expander('Advanced', expanded=False):
         f2 = st.file_uploader('Document (for compare)', type=['pdf','docx','sec'])
-    # Search & Highlight Controls
+
+    st.subheader('🔎 Search Terms')
+    if 'new_term' not in st.session_state:
+        st.session_state.new_term = ''
+    st.session_state.new_term = st.text_input('Add term:', st.session_state.new_term)
+    if st.button('Save term'):
+        term = st.session_state.new_term.strip()
+        if term:
+            S = DB.table('searches')
+            S.insert({'term': term, 'hits': 0})
+            st.session_state.new_term = ''
+            st.experimental_rerun()
+
+    S = DB.table('searches')
+    saved_terms = [r['term'] for r in S.all()]
+    st.subheader('Saved Terms')
+    active_terms = st.multiselect('Activate:', saved_terms, default=saved_terms)
+
     st.subheader('Navigation & Highlights')
     # TOC
     toc = st.session_state.get('toc_data', {}).get('entries', [])
@@ -99,10 +125,6 @@ with st.sidebar:
     # NER labels
     labels = st.session_state.get('ner_labels', [])
     active_labels = st.multiselect('NER Labels', labels, default=labels)
-    # Saved searches
-    S = DB.table('searches')
-    terms = [r['term'] for r in S.all()]
-    active_terms = st.multiselect('Search Terms', terms, default=terms)
     # Clickable results
     with st.expander('Search Results', expanded=False):
         hits = st.session_state.get('search_hits', [])
@@ -114,8 +136,15 @@ with st.sidebar:
     # Settings at bottom
     st.markdown("<div style='position:absolute; bottom:0; width:90%;'>", unsafe_allow_html=True)
     with st.expander('Settings', expanded=False):
-        SIMULATE = st.checkbox('Dev mode (simulate pipelines)', value=False)
-        maxd = st.slider('Max edit distance', 0, 5, 1)
+        if 'simulate' not in st.session_state:
+            st.session_state.simulate = SIMULATE_DEFAULT
+        st.session_state.simulate = st.checkbox('Dev mode (simulate pipelines)',
+                                               value=st.session_state.simulate)
+        if 'max_dist' not in st.session_state:
+            st.session_state.max_dist = 1
+        st.session_state.max_dist = st.slider('Max edit distance', 0, 5,
+                                             st.session_state.max_dist,
+                                             key='max_dist')
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ─── Admin View ──────────────────────────────────────────
@@ -149,7 +178,7 @@ if not viewer_bytes:
 doc_name = f1.name if f1 else sample_url.split('/')[-1]
 
 # ─── Pipeline Data or stub ───────────────────────────────
-if SIMULATE:
+if st.session_state.get('simulate', SIMULATE_DEFAULT):
     toc_data, ner_data = {'entries':[]}, {'entities':[]}
 else:
     toc_data = palantir_get('/pipelines/toc_extract', params={'fileName':doc_name})
@@ -169,7 +198,7 @@ for ent in ner_data.get('entities', []):
 # Search annotations
 txt_all = extract_text(viewer_bytes, doc_name)
 search_hits = []
-for term in [r['term'] for r in DB.table('searches').all()]:
+for term in active_terms:
     # exact
     for m in re.finditer(re.escape(term), txt_all, re.I):
         pg_idx = next((i for i,p in enumerate(doc) if m.start()<len(p.get_text('text'))),0)
@@ -179,7 +208,8 @@ for term in [r['term'] for r in DB.table('searches').all()]:
             snippet = txt_all[m.start():m.end()]
             search_hits.append({'term':term,'snippet':snippet,'page':pg_idx})
     # fuzzy
-    for s,e in fuzzy_positions(txt_all, term, maxd):
+    for s, e in fuzzy_positions(txt_all, term,
+                                st.session_state.get('max_dist', 1)):
         snippet = txt_all[s:e]
         for i in range(len(doc)):
             rects = doc[i].search_for(snippet)
