@@ -1,7 +1,7 @@
 """
-streamlit_app.py  ·  v0.2.3  (June 2025)
+streamlit_app.py  ·  v0.2.4  (June 2025)
 
-ACA Viewer – complete, self-contained Streamlit app.
+ACA Viewer – self-contained Streamlit app.
 
 Features:
 • SIMULATE_PALANTIR flag / sidebar toggle
@@ -10,248 +10,171 @@ Features:
 • TinyDB persistence for comments & saved searches
 • Admin page for User B via ?admin=1
 • Uses st.query_params and st.rerun() (with fallback)
-• Exits cleanly if run with “python” instead of “streamlit run”
+• Exits cleanly if run with “streamlit run”
 """
 
 # ── stdlib ───────────────────────────────────────────────
-import io
-import os
-import re
-import sys
-import datetime
+import io, os, re, sys, datetime
 from functools import lru_cache
 from pathlib import Path
 
 # ── third-party ──────────────────────────────────────────
 import streamlit as st
 import fitz                          # PyMuPDF
-from Levenshtein import distance     # fuzzy search
+from Levenshtein import distance     # fuzzy
 from tinydb import TinyDB, Query      # JSON DB
 from requests import Session
 
 # ── CONFIG ───────────────────────────────────────────────
 PALANTIR_BASE  = os.getenv("PALANTIR_BASE",  "https://foundry.api.dod.mil")
 PALANTIR_TOKEN = os.getenv("PALANTIR_TOKEN", "###-token-###")
-SIMULATE       = bool(int(os.getenv("SIMULATE_PALANTIR", "0")))
+SIMULATE       = False  # default; controlled by sidebar
 DB             = TinyDB(Path(__file__).with_name("aca_store.json"))
 HEADERS        = {"Authorization": f"Bearer {PALANTIR_TOKEN}"}
 
 COLOR_POOL = [
-    "#FFC107", "#03A9F4", "#8BC34A", "#E91E63",
-    "#9C27B0", "#FF5722", "#607D8B", "#FF9800",
+    "#FFC107","#03A9F4","#8BC34A","#E91E63",
+    "#9C27B0","#FF5722","#607D8B","#FF9800",
 ]
 
-# ── guard: must run via `streamlit run` ─────────────────
+# guard: must run via streamlit
 if not hasattr(st, "runtime") or not hasattr(st.runtime, "scriptrunner_utils"):
-    print("\n⚠️  Please start this app with:\n\n    streamlit run streamlit_app.py\n")
+    print("Run with: streamlit run streamlit_app.py")
     sys.exit(1)
 
-# ══════════════════════════════════════════════════════════════
-#  PALANTIR helper (live or simulated)
-# ══════════════════════════════════════════════════════════════
-@lru_cache(maxsize=128)
-def palantir_get(endpoint: str, params: dict | None = None):
-    """Fetch from Foundry or return mock JSON when SIMULATE."""
-    if SIMULATE:
-        if "toc_extract" in endpoint:
-            return {"entries": [
-                {"title": "CHAPTER 1 INTRODUCTION", "page": 0},
-                {"title": "1-1 Purpose",            "page": 1},
-            ]}
-        if "ner_extract" in endpoint:
-            return {"entities": [
-                {"id": "e1", "text": "Department of Defense", "label": "ORG",
-                 "page": 0, "coords": [50, 100, 320, 118]},
-                {"id": "e2", "text": "United States",         "label": "LOC",
-                 "page": 0, "coords": [50, 180, 250, 198]},
-            ]}
-        if "sec_parse" in endpoint:
-            return {"section": "dummy-sec-json"}
-        return {}
+# ══════════ PALANTIR HELPER ══════════
+@lru_cache(maxsize=64)
+def palantir_get(endpoint: str, params: dict=None):
+    """Fetch from Foundry REST."""
     url = f"{PALANTIR_BASE}{endpoint}"
-    s = Session()
-    s.headers.update(HEADERS)
-    resp = s.get(url, params=params, timeout=45)
+    s = Session(); s.headers.update(HEADERS)
+    resp = s.get(url, params=params, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
-# ══════════════════════════════════════════════════════════════
-#  UTILITIES
-# ══════════════════════════════════════════════════════════════
+# ══════════ UTILITIES ══════════
 def extract_text(data: bytes, name: str) -> str:
-    suf = Path(name).suffix.lower()
-    if suf == ".pdf":
+    ext = Path(name).suffix.lower()
+    if ext == ".pdf":
         pdf = fitz.open(stream=data, filetype="pdf")
-        return "\n".join(page.get_text("text") for page in pdf)
-    elif suf in {".doc", ".docx"}:
+        return "\n".join(p.get_text("text") for p in pdf)
+    if ext in {".doc",".docx"}:
         import docx2txt, tempfile
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(data)
-            tmp.flush()
+            tmp.write(data); tmp.flush()
             return docx2txt.process(tmp.name)
-    elif suf == ".sec":
-        return data.decode("utf-8", "ignore")
-    else:
-        raise ValueError("Unsupported file type")
+    if ext == ".sec":
+        return data.decode("utf-8","ignore")
+    raise ValueError("Unsupported file type")
 
+def next_color(i): return COLOR_POOL[i%len(COLOR_POOL)]
 
-def next_color(idx: int) -> str:
-    return COLOR_POOL[idx % len(COLOR_POOL)]
+def fuzzy_positions(txt, term, maxd):
+    out=[]
+    for m in re.finditer(r'\b\w+\b', txt, re.I):
+        if distance(m.group(0).lower(), term.lower())<=maxd:
+            out.append((m.start(), m.end()))
+    return out
 
+# ══════════ APP ══════════
+st.set_page_config(page_title="ACA Viewer",layout="wide")
+params=st.query_params
+ADMIN=params.get("admin",["0"])[0]=="1"
 
-def fuzzy_positions(text: str, term: str, max_dist: int) -> list[tuple[int,int]]:
-    matches = []
-    for m in re.finditer(r'\b\w+\b', text, re.I):
-        w = m.group(0)
-        if distance(w.lower(), term.lower()) <= max_dist:
-            matches.append((m.start(), m.end()))
-    return matches
-
-
-def diff_strings(a: str, b: str, ctx: int = 3) -> list[str]:
-    import difflib
-    return list(difflib.unified_diff(
-        a.splitlines(), b.splitlines(), lineterm="", n=ctx,
-        fromfile="Doc A", tofile="Doc B"
-    ))
-
-# ══════════════════════════════════════════════════════════════
-#  STREAMLIT APP
-# ══════════════════════════════════════════════════════════════
-st.set_page_config(page_title="ACA Viewer", page_icon="📑", layout="wide")
-params = st.query_params
-ADMIN_VIEW = params.get("admin", ["0"])[0] == "1"
-
-# Sidebar controls
+# Sidebar
 with st.sidebar:
-    st.title("ACA ⚙️")
-    if "simulate" not in st.session_state:
-        st.session_state.simulate = SIMULATE
-    SIMULATE = st.checkbox("🛠 Dev mode (simulate Palantir)", value=st.session_state.simulate)
-    st.session_state.simulate = SIMULATE
-    if st.button("Reload page"):
+    st.title("ACA Viewer 🌐")
+    SIMULATE=st.checkbox("Dev mode (simulate)",value=False)
+    st.markdown("---")
+    if st.button("Reload"):
         try: st.rerun()
-        except AttributeError: st.experimental_rerun()
-    if not ADMIN_VIEW:
-        st.markdown("[Switch to Admin view](?admin=1)")
+        except: st.experimental_rerun()
+    if not ADMIN:
+        st.markdown("[Admin view](?admin=1)")
 
-if ADMIN_VIEW:
-    st.header("👩‍🔧 Admin – saved searches & comments")
-    searches = DB.table("searches").all()
-    comments = DB.table("comments").all()
-    st.subheader(f"🔍 Saved searches ({len(searches)})")
-    for r in searches:
-        st.write(f"- **{r['term']}** · used {r['hits']}× · id `{r.doc_id}`")
-    st.subheader(f"💬 Comments ({len(comments)})")
-    for c in comments:
-        st.write(f"• *{c['snippet']}* — {c['note']} _(on {c['file']})_")
-    sys.exit(0)
+if ADMIN:
+    st.header("Admin – saved searches & comments")
+    # show DB tables
+    st.subheader("Searches")
+    for r in DB.table("searches").all(): st.write(r)
+    st.subheader("Comments")
+    for c in DB.table("comments").all(): st.write(c)
+    st.stop()
 
-# Upload area
-c1, c2 = st.columns(2)
-with c1:
-    f1 = st.file_uploader("Document A", type=["pdf","docx","doc","sec"], key="A")
-with c2:
-    f2 = st.file_uploader("Document B (optional diff)", type=["pdf","docx","doc","sec"], key="B")
-
-# Fallback sample
+# Uploads
+c1,c2=st.columns(2)
+with c1: f1=st.file_uploader("Document A", type=["pdf","docx","sec"])
+with c2: f2=st.file_uploader("Document B (diff)", type=["pdf","docx","sec"])
 if not f1:
-    if SIMULATE:
-        sample = os.getenv("SIM_SAMPLE_PATH", "./sample.pdf")
-        if Path(sample).exists():
-            f1 = open(sample, "rb")
-            st.warning(f"🔧 Using sample: {sample}")
-        else:
-            st.error(f"Sample not found: {sample}")
-            st.stop()
-    else:
-        st.info("Upload at least one file ⬆️")
-        st.stop()
+    st.info("Upload Document A")
+    st.stop()
 
-# Read file bytes once
-doc_bytes = f1.read()
+# Read bytes
+doc_bytes=f1.read()
 
-# Fetch Palantir data
-with st.spinner("Fetching Palantir data…"):
-    toc = palantir_get("/pipelines/toc_extract", params={"fileName": f1.name})
-    ner = palantir_get("/pipelines/ner_extract", params={"fileName": f1.name})
-    sec_json = palantir_get("/pipelines/sec_parse", params={"fileName": f1.name}) if f1.name.lower().endswith(".sec") else None
-
-# Highlight controls
-st.sidebar.header("🔦 Highlight controls")
-show_toc = st.sidebar.checkbox("Show TOC cards", True)
-if show_toc:
-    for i, entry in enumerate(toc.get("entries", [])):
-        if st.sidebar.button(entry["title"], key=f"toc-{i}"):
-            st.session_state["goto_page"] = entry["page"]
-
-st.sidebar.subheader("NER labels")
-all_labels = sorted({e["label"] for e in ner.get("entities", [])})
-active_labels = st.sidebar.multiselect("Show labels:", all_labels, default=all_labels)
-
-st.sidebar.subheader("🔍 Saved searches")
-SearchTbl = DB.table("searches")
-def incr_hit(term):
-    q = Query(); cur = SearchTbl.get(q.term == term)
-    if cur:
-        SearchTbl.update({"hits": cur["hits"] + 1}, doc_ids=[cur.doc_id])
-    else:
-        SearchTbl.insert({"term": term, "hits": 1})
-
-saved_terms = [r["term"] for r in SearchTbl.all()]
-active_terms = st.sidebar.multiselect("Activate terms:", saved_terms, default=saved_terms)
-new_term = st.sidebar.text_input("New term")
-if st.sidebar.button("Save term") and new_term.strip():
-    SearchTbl.insert({"term": new_term.strip(), "hits": 0})
-    try: st.rerun()
-    except: st.experimental_rerun()
-
-st.sidebar.subheader("Fuzzy search")
-max_dist = st.sidebar.slider("Max edit distance", 0, 5, 1)
-
-# Main viewer
-st.title("📑 ACA Viewer")
-pdf = fitz.open(stream=doc_bytes, filetype="pdf") if f1.name.lower().endswith(".pdf") else None
-page_no = st.session_state.get("goto_page", 0)
-if pdf:
-    page = pdf[page_no]
-    for ent in ner.get("entities", []):
-        if ent.get("label") in active_labels and ent.get("page")==page_no and ent.get("coords"):
-            rect = fitz.Rect(*ent["coords"])
-            col = next_color(all_labels.index(ent["label"]))
-            page.draw_rect(rect, color=fitz.utils.getColor(col), fill=fitz.utils.getColor(col+"55"))
-    st.image(page.get_pixmap().tobytes(), use_column_width=True)
+# Pipelines (stub if simulate)
+if SIMULATE:
+    toc={"entries":[]}  
+    ner={"entities":[]}
 else:
-    st.warning("Non-PDF rendering placeholder.")
+    with st.spinner("Fetching pipelines…"):
+        toc=palantir_get("/pipelines/toc_extract",params={"fileName":f1.name})
+        ner=palantir_get("/pipelines/ner_extract",params={"fileName":f1.name})
+        sec_json=palantir_get("/pipelines/sec_parse",params={"fileName":f1.name}) if f1.name.lower().endswith(".sec") else None
 
-text = extract_text(doc_bytes, f1.name)
+# Sidebar highlight
+st.sidebar.header("Highlights 🔦")
+show_toc=st.sidebar.checkbox("TOC Cards",True)
+if show_toc:
+    for i,e in enumerate(toc.get("entries",[])):
+        if st.sidebar.button(e["title"][:50],key=i): st.session_state["pg"]=e["page"]
+labels=sorted({x["label"] for x in ner.get("entities",[])})
+active_lbl=st.sidebar.multiselect("Entities",labels,default=labels[:3])
+# Saved searches
+tbl=DB.table("searches")
+ps=[r["term"] for r in tbl.all()]
+sel=st.sidebar.multiselect("Search terms",ps,default=ps)
+ns=st.sidebar.text_input("New term")
+if st.sidebar.button("Add term") and ns:
+    tbl.insert({"term":ns,"hits":0});st.experimental_rerun()
+# Fuzzy
+dmax=st.sidebar.slider("Max edit",0,5,1)
+
+# Render PDF
+st.title("ACA Viewer")
+if f1.name.lower().endswith(".pdf"):
+    pg=st.session_state.get("pg",0)
+    doc=fitz.open(stream=doc_bytes,filetype="pdf")
+    p=doc[pg]
+    # draw entities
+    for ent in ner.get("entities",[]):
+        if ent["label"] in active_lbl and ent.get("coords") and ent.get("page")==pg:
+            r=fitz.Rect(*ent["coords"])
+            c=next_color(labels.index(ent["label"]))
+            p.draw_rect(r,color=fitz.utils.getColor(c),fill=fitz.utils.getColor(c+"55"))
+    st.image(p.get_pixmap().tobytes(),use_column_width=True)
+else:
+    st.write("Non-PDF view")
+
+# Text matches
+txt=extract_text(doc_bytes,f1.name)
 st.subheader("Matches")
-hits = []
-for term in active_terms:
-    for s, e in fuzzy_positions(text, term, max_dist):
-        snippet = text[max(0, s-30):e+30].replace("\n", " ")
-        hits.append({"term": term, "snippet": snippet})
-    incr_hit(term)
-st.write(f"Found {len(hits)} matches.")
-for h in hits[:250]: st.write(f"• **{h['term']}** …{h['snippet']}…")
+hits=[]
+for t in sel:
+    for s,e in fuzzy_positions(txt,t,dmax):
+        hits.append(f"{t}: {txt[s:e]}")
+DB.table("searches").update(lambda r: {"hits":r["hits"]+len([1 for _ in fuzzy_positions(txt,r["term"],dmax)])},Query().term_test=lambda v: True)
+for m in hits[:50]: st.write(m)
 
-# Commenting
-st.subheader("💬 Add comment")
-snippet_sel = st.text_input("Snippet (copy/paste)")
-note = st.text_area("Your note")
-if st.button("Save comment") and snippet_sel.strip() and note.strip():
-    DB.table("comments").insert({
-        "timestamp": datetime.datetime.utcnow().isoformat(),
-        "file": f1.name,
-        "snippet": snippet_sel.strip(),
-        "note": note.strip()
-    })
-    try: st.rerun()
-    except: st.experimental_rerun()
+# Comments
+st.subheader("Comments 💬")
+cs=st.text_area("Selected text")
+note=st.text_input("Note")
+if st.button("Save") and cs and note:
+    DB.table("comments").insert({"time":datetime.datetime.utcnow().isoformat(),"file":f1.name,"snippet":cs,"note":note});st.experimental_rerun()
 
-# Diff viewer
+# Diff
 if f2:
-    st.subheader("🔍 Diff Viewer")
-    other_text = extract_text(f2.read(), f2.name)
-    diff = diff_strings(text, other_text)
-    st.code("\n".join(diff), language="diff")
+    st.subheader("Diff 🔍")
+    ot=extract_text(f2.read(),f2.name)
+    for line in diff_strings(txt,ot): st.code(line)
