@@ -1,4 +1,4 @@
-```python
+
 """
 streamlit_app.py  ·  v0.2.13  (June 2025)
 
@@ -193,4 +193,4 @@ if 'f2' in locals() and f2:
     st.subheader('Diff')
     txt2 = extract_text(f2.read(), f2.name)
     for line in diff_strings(txt_all, txt2): st.code(line)
-```
+
