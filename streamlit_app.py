@@ -134,15 +134,11 @@ with st.sidebar:
     # Settings at bottom
     st.markdown("<div style='position:absolute; bottom:0; width:90%;'>", unsafe_allow_html=True)
     with st.expander('Settings', expanded=False):
-        if 'simulate' not in st.session_state:
-            st.session_state.simulate = SIMULATE_DEFAULT
-        st.session_state.simulate = st.checkbox('Dev mode (simulate pipelines)',
-                                               value=st.session_state.simulate)
-        if 'max_dist' not in st.session_state:
-            st.session_state.max_dist = 1
-        st.session_state.max_dist = st.slider('Max edit distance', 0, 5,
-                                             st.session_state.max_dist,
-                                             key='max_dist')
+        simulate_default = st.session_state.get('simulate', SIMULATE_DEFAULT)
+        st.checkbox('Dev mode (simulate pipelines)', value=simulate_default,
+                    key='simulate')
+        maxd_default = st.session_state.get('max_dist', 1)
+        st.slider('Max edit distance', 0, 5, maxd_default, key='max_dist')
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ─── Admin View ──────────────────────────────────────────
@@ -238,5 +234,3 @@ if f2:
     for line in diff_strings(txt_all, text2):
         st.code(line)
 
-if __name__ == "__main__":
-    run()
