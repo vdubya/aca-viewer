@@ -2,7 +2,7 @@
 
 A sample Streamlit implementation showcasing the ACA Viewer. The app uploads PDF, Word or UFGS XML SEC files and displays them with dynamic highlighting driven by Palantir pipelines.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://aca-viewer.streamlit.app/)
 
 ## Features
 - Upload a document and view extracted table of contents and named entities
