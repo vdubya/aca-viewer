@@ -91,7 +91,7 @@ ADMIN = params.get('admin',['0'])[0] == '1'
 
 if 'doc_loaded' not in st.session_state:
     st.session_state['doc_loaded'] = False
-doc_loaded = st.session_state['doc_loaded']
+doc_loaded = st.session_state.get('doc_loaded', False)
 
 # ─── Sidebar ─────────────────────────────────────────────
 with st.sidebar:
@@ -107,6 +107,9 @@ with st.sidebar:
             S = DB.table('searches')
             S.insert({'term': term, 'hits': 0})
             st.session_state.new_term = ''
+        try:
+            st.rerun()
+        except AttributeError:
             st.experimental_rerun()
 
     S = DB.table('searches')
@@ -156,27 +159,46 @@ if ADMIN:
 
 # ─── Main Panel: Document A upload & sample button ───────
 st.header('Load file to analyze...')
-viewer_bytes = None
+viewer_bytes = st.session_state.get('viewer_bytes')
+doc_name = st.session_state.get('doc_name', '')
 f1 = st.file_uploader('Upload file to analyze...', type=['pdf','docx','sec'], key='mainA')
 if st.button('Load Sample PDF'):
     sample_url = 'https://www.wbdg.org/FFC/DOD/UFC/ufc_1_300_01_2021.pdf'
     try:
         resp = requests.get(sample_url)
         resp.raise_for_status()
-        viewer_bytes = resp.content
-        st.success('Loaded sample PDF')
+        st.session_state['viewer_bytes'] = resp.content
+        st.session_state['doc_name'] = sample_url.split('/')[-1]
         st.session_state['doc_loaded'] = True
+        st.success('Loaded sample PDF')
+        try:
+            st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
     except Exception as e:
         st.error(f"Error loading sample PDF: {e}")
-if f1:
-    viewer_bytes = f1.read()
+if f1 and not st.session_state.get('doc_loaded'):
+    st.session_state['viewer_bytes'] = f1.read()
+    st.session_state['doc_name'] = f1.name
     st.session_state['doc_loaded'] = True
+    try:
+        st.rerun()
+    except AttributeError:
+        st.experimental_rerun()
+elif f1:
+    viewer_bytes = f1.read()
 if not viewer_bytes:
     st.info('Please upload Document A or click Load Sample')
     st.session_state['doc_loaded'] = False
     st.stop()
-# document name for pipelines and diff fallback
-doc_name = f1.name if f1 else sample_url.split('/')[-1]
+else:
+    st.session_state['viewer_bytes'] = viewer_bytes
+    if not doc_name:
+        if f1:
+            doc_name = f1.name
+        else:
+            doc_name = st.session_state.get('doc_name', sample_url.split('/')[-1])
+    st.session_state['doc_name'] = doc_name
 
 # ─── Pipeline Data or stub ───────────────────────────────
 if st.session_state.get('simulate', SIMULATE_DEFAULT):
@@ -223,7 +245,17 @@ st.session_state['search_hits'] = search_hits
 
 # ─── Render PDF via streamlit-pdf-viewer ────────────────
 st.title('AI Criteria Assistant')
+st.markdown(
+    """
+    <style>
+    .viewer-bg {display:flex; justify-content:center; background:#eee; padding:20px;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.markdown('<div class="viewer-bg">', unsafe_allow_html=True)
 pdf_viewer(viewer_bytes, height=800, annotations=annotations)
+st.markdown('</div>', unsafe_allow_html=True)
 
 # ─── Comments & Diff ─────────────────────────────────────
 # Comments
