@@ -1,8 +1,8 @@
 ```python
 """
-streamlit_app.py  ·  v0.2.12  (June 2025)
+streamlit_app.py  ·  v0.2.13  (June 2025)
 
-ACA Viewer – self-contained Streamlit app with streamlit-pdf-viewer annotations.
+ACA Viewer – self-contained Streamlit app with enhanced PDF loading.
 
 Features:
 • Dev mode with SIMULATE toggle
@@ -13,18 +13,20 @@ Features:
 • Two-doc diff view
 • Admin page via ?admin=1
 • Uses st.query_params and st.rerun() with fallback
-• Runs under streamlit run
+• Doc A uploader on main panel; Doc B in Advanced sidebar
+• Sample PDF load button for quick testing
 """
 import os, re, datetime
 from functools import lru_cache
 from pathlib import Path
 
 import streamlit as st
+import requests
 import fitz  # PyMuPDF
 from Levenshtein import distance
 from tinydb import TinyDB, Query
 from requests import Session
-from streamlit_pdf_viewer import pdf_viewer  # new component
+from streamlit_pdf_viewer import pdf_viewer  # PDF.js component
 
 # ─── Config ─────────────────────────────────────────────
 PALANTIR_BASE  = os.getenv("PALANTIR_BASE", "https://foundry.api.dod.mil")
@@ -71,7 +73,7 @@ def next_color(idx: int) -> str:
 
 
 def fuzzy_positions(text: str, term: str, maxd: int) -> list[tuple[int,int]]:
-    hits = []
+    hits=[]
     for m in re.finditer(r'\b\w+\b', text, re.I):
         if distance(m.group(0).lower(), term.lower()) <= maxd:
             hits.append((m.start(), m.end()))
@@ -87,13 +89,14 @@ with st.sidebar:
     st.title('ACA Viewer')
     SIMULATE = st.checkbox('Dev mode (simulate pipelines)', value=False)
     st.markdown('---')
+    with st.expander('Advanced', expanded=False):
+        f2 = st.file_uploader('Document B (diff)', type=['pdf','docx','sec'])
     if st.button('Reload'):
         try: st.rerun()
         except AttributeError: st.experimental_rerun()
     if not ADMIN:
         st.markdown('[Switch to Admin view](?admin=1)')
-    with st.expander('Advanced', expanded=False):
-        f2 = st.file_uploader('Document B (diff)', type=['pdf','docx','sec'])
+    # Settings at bottom
     st.markdown("<div style='position:absolute; bottom:0; width:90%;'>", unsafe_allow_html=True)
     with st.expander('Settings', expanded=False):
         maxd = st.slider('Max edit distance', 0, 5, 1)
@@ -108,99 +111,80 @@ if ADMIN:
     for c in DB.table('comments').all(): st.write(c)
     st.stop()
 
-# ─── File Uploads ────────────────────────────────────────
-f1 = st.sidebar.file_uploader('Document A', type=['pdf','docx','sec'])
-if not f1:
-    st.info('Please upload Document A')
+# ─── Main Panel: Document A upload & sample button ───────┐
+st.header('Document A')
+viewer_bytes = None
+f1 = st.file_uploader('Upload Document A', type=['pdf','docx','sec'], key='mainA')
+if st.button('Load Sample PDF'):
+    sample_url = 'https://www.wbdg.org/FFC/DOD/UFC/ufc_1_300_01_2021.pdf'
+    try:
+        resp = requests.get(sample_url)
+        resp.raise_for_status()
+        viewer_bytes = resp.content
+        st.success('Loaded sample PDF')
+    except Exception as e:
+        st.error(f"Error loading sample PDF: {e}")
+if f1:
+    viewer_bytes = f1.read()
+if not viewer_bytes:
+    st.info('Please upload Document A or click Load Sample')
     st.stop()
-bytes1 = f1.read()
+# document name for extract_text fallback
+doc_name = f1.name if f1 else sample_url.split('/')[-1]
 
 # ─── Pipeline Data (or stub) ────────────────────────────
 if SIMULATE:
     toc, ner = {'entries':[]}, {'entities':[]}
 else:
-    toc = palantir_get('/pipelines/toc_extract', params={'fileName':f1.name})
-    ner = palantir_get('/pipelines/ner_extract', params={'fileName':f1.name})
+    toc = palantir_get('/pipelines/toc_extract', params={'fileName': doc_name})
+    ner = palantir_get('/pipelines/ner_extract', params={'fileName': doc_name})
 
 # ─── Compute Annotations ─────────────────────────────────
-doc = fitz.open(stream=bytes1, filetype='pdf') if f1.name.lower().endswith('.pdf') else None
+doc = fitz.open(stream=viewer_bytes, filetype='pdf')
 annotations = []
-if doc:
-    # NER annotations
-    for ent in ner.get('entities', []):
-        pg = ent.get('page'); coords = ent.get('coords')
-        if pg is not None and coords:
-            annotations.append({
-                'page': pg,
-                'coords': coords,
-                'color': next_color(hash(ent['label']))
-            })
-    # Search annotations
-    full_text = extract_text(bytes1, f1.name)
-    for term in [r['term'] for r in DB.table('searches').all()]:
-        # exact
-        for m in re.finditer(re.escape(term), full_text, re.I):
-            # find page and rects
-            for i in range(len(doc)):
-                rects = doc[i].search_for(term)
-                for r in rects:
-                    annotations.append({
-                        'page': i,
-                        'coords': [r.x0, r.y0, r.x1, r.y1],
-                        'color': next_color(hash(term))
-                    })
-        # fuzzy
-        for s,e in fuzzy_positions(full_text, term, maxd):
-            snippet = full_text[s:e]
-            for i in range(len(doc)):
-                rects = doc[i].search_for(snippet)
-                if rects:
-                    r = rects[0]
-                    annotations.append({
-                        'page': i,
-                        'coords': [r.x0, r.y0, r.x1, r.y1],
-                        'color': next_color(hash(term))
-                    })
+# NER annotations
+for ent in ner.get('entities', []):
+    pg = ent.get('page'); coords = ent.get('coords')
+    if pg is not None and coords:
+        annotations.append({'page':pg,'coords':coords,'color':next_color(hash(ent['label']))})
+# Search annotations
+txt_all = extract_text(viewer_bytes, doc_name)
+for term in [r['term'] for r in DB.table('searches').all()]:
+    for m in re.finditer(re.escape(term), txt_all, re.I):
+        pg_idx = next((i for i,p in enumerate(doc) if m.start()<len(p.get_text('text'))),0)
+        rects = doc[pg_idx].search_for(term)
+        if rects: annotations.append({'page':pg_idx,'coords':[rects[0].x0,rects[0].y0,rects[0].x1,rects[0].y1],'color':next_color(hash(term))})
+    for s,e in fuzzy_positions(txt_all, term, maxd):
+        snippet = txt_all[s:e]
+        for i in range(len(doc)):
+            rects = doc[i].search_for(snippet)
+            if rects: annotations.append({'page':i,'coords':[rects[0].x0,rects[0].y0,rects[0].x1,rects[0].y1],'color':next_color(hash(term))}); break
 
 # ─── Render PDF via streamlit-pdf-viewer ────────────────
 st.title('ACA Viewer')
-if doc:
-    pdf_bytes = bytes1
-    pdf_viewer(pdf_bytes, height=800, annotations=annotations)
-else:
-    st.write('Non-PDF preview not supported.')
+pdf_viewer(viewer_bytes, height=800, annotations=annotations)
 
 # ─── Clickable Search Results ───────────────────────────
-# (unchanged)
-full_text = extract_text(bytes1, f1.name)
 offsets=[]; acc=0
-for p in fitz.open(stream=bytes1, filetype='pdf'):
-    offsets.append(acc); acc+=len(p.get_text('text'))+1
+for p in doc: offsets.append(acc); acc += len(p.get_text('text'))+1
 hits=[]
 for term in [r['term'] for r in DB.table('searches').all()]:
-    for s,e in fuzzy_positions(full_text, term, maxd):
+    for s,e in fuzzy_positions(txt_all, term, maxd):
         pg = max(i for i, off in enumerate(offsets) if s >= off)
-        hits.append({'term': term, 'snippet': full_text[s:e], 'page': pg})
-        q = Query(); T = DB.table('searches')
-        if T.get(q.term == term):
-            T.update({'hits': T.get(q.term == term)['hits'] + 1}, q.term == term)
-with st.sidebar.expander('Search Results', expanded=True):
-    for idx, h in enumerate(hits[:50]):
-        lbl = f"{h['term']} (p{h['page']+1}): {h['snippet'][:30]}..."
-        if st.button(lbl, key=f'srch{idx}'):
-            st.session_state['goto_page'] = h['page']
+        hits.append({'term':term,'snippet':txt_all[s:e],'page':pg})
+        q=Query(); T=DB.table('searches')
+        if T.get(q.term==term): T.update({'hits':T.get(q.term==term)['hits']+1},q.term==term)
+with st.sidebar.expander('Search Results',expanded=True):
+    for idx,h in enumerate(hits[:50]):
+        lbl=f"{h['term']} (p{h['page']+1}): {h['snippet'][:30]}..."
+        if st.button(lbl, key=f'srch{idx}'): st.session_state['goto_page']=h['page']
 
 # ─── Comments ───────────────────────────────────────────
 st.subheader('Comments')
 snip = st.text_area('Selected snippet')
 note = st.text_input('Note')
 if st.button('Save Comment') and snip and note:
-    DB.table('comments').insert({
-        'timestamp': datetime.datetime.utcnow().isoformat(),
-        'file': f1.name,
-        'snippet': snip,
-        'note': note
-    })
+    DB.table('comments').insert({'timestamp':datetime.datetime.utcnow().isoformat(),'file':doc_name,'snippet':snip,'note':note});
     try: st.rerun()
     except AttributeError: st.experimental_rerun()
 
@@ -208,6 +192,5 @@ if st.button('Save Comment') and snip and note:
 if 'f2' in locals() and f2:
     st.subheader('Diff')
     txt2 = extract_text(f2.read(), f2.name)
-    for line in diff_strings(full_text, txt2):
-        st.code(line)
+    for line in diff_strings(txt_all, txt2): st.code(line)
 ```
