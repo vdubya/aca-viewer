@@ -1,4 +1,3 @@
-
 """
 streamlit_app.py  ·  v0.2.6  (June 2025)
 
@@ -151,8 +150,10 @@ active_terms = st.sidebar.multiselect('Search Terms', terms, default=terms)
 new_term = st.sidebar.text_input('New Search Term')
 if st.sidebar.button('Add') and new_term:
     TBL.insert({'term': new_term.strip(), 'hits':0})
-    try: st.rerun()
-    except: st.experimental_rerun()
+    try:
+        st.rerun()
+    except AttributeError:
+        st.experimental_rerun()
 # Fuzzy slider
 maxd = st.sidebar.slider('Max edit distance', 0, 5, 1)
 
@@ -194,8 +195,10 @@ if st.button('Save Comment') and snip and note:
         'timestamp': datetime.datetime.utcnow().isoformat(),
         'file': f1.name, 'snippet': snip, 'note': note
     })
-    try: st.rerun()
-    except: st.experimental_rerun()
+    try:
+        st.rerun()
+    except AttributeError:
+        st.experimental_rerun()
 
 # ─── Diff View ───────────────────────────────────────────
 if f2:
